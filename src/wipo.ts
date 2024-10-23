@@ -2,14 +2,20 @@ import pLimit from "p-limit";
 
 import puppeteer from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
-import fs from "fs";
+import fs, { fsync } from "fs";
 import { Browser, Cookie, ElementHandle, Page } from "puppeteer";
 import { countDate, tryCreateBulk } from "./elasticsearch";
 import { TrademarkInfo } from "./interface";
 import minimist from "minimist";
 import winston, { log } from "winston";
 import { createLogger, setLevel } from "./logger";
-import { createDateRange, getCrawledItemsCount, getQueue, tryUpdateCrawl, updateCrawl } from "./leveldb";
+import {
+  createDateRange,
+  getCrawledItemsCount,
+  getQueue,
+  tryUpdateCrawl,
+  updateCrawl,
+} from "./leveldb";
 
 puppeteer.use(Stealth());
 
@@ -20,9 +26,9 @@ interface SearchResult {
 }
 
 interface Proxy {
-  server: string,
-  user: string,
-  password: string
+  server: string;
+  user: string;
+  password: string;
 }
 
 // let _cookies: Cookie[];
@@ -55,7 +61,15 @@ async function tryParseProduct(page: Page) {
   } catch {}
 }
 
+async function  checkProductFinal(page: Page) {
+  const text =  await page.evaluate(() => {
+    return document.querySelector("#detailsPanelContentDiv .detail-wrapper")?.textContent
+  });
+  return !text?.includes("${");
+}
+
 async function parseProduct(page: Page) {
+  if (!await checkProductFinal(page)) return null;
   // Bóc tách dữ liệu từ HTML
   return await page.evaluate(() => {
     const rows = document.querySelectorAll(".detail-container > .row");
@@ -254,8 +268,13 @@ async function showDetails(
   logger.debug("click show detail");
 }
 
-function isProduct(product: TrademarkInfo | undefined) {
-  return product && product.applicationNumber != "" && !product.applicationNumber.includes("${")
+function isProduct(product: TrademarkInfo | null | undefined) {
+  return (
+    product &&
+    product.applicationNumber &&
+    product.applicationDate &&
+    !product.applicationNumber.includes("${")
+  );
 }
 
 async function getProduct(
@@ -269,12 +288,12 @@ async function getProduct(
     try {
       await showDetails(logger, page, handle);
       const product = await tryParseProduct(page);
-      logger.debug(product?.applicationNumber);
+      logger.debug(`${product?.applicationNumber} | ${product?.applicationDate}`);
       await backToSearch(logger, page);
       if (isProduct(product)) {
         return product!;
       }
-      retry--
+      retry--;
     } catch (err: any) {
       errMsg = err;
       retry--;
@@ -360,7 +379,11 @@ async function isNoData(page: Page) {
   });
 }
 
-const tryUpdateResult = async (logger: winston.Logger, page: Page, start: number) => {
+const tryUpdateResult = async (
+  logger: winston.Logger,
+  page: Page,
+  start: number
+) => {
   let retry = 3;
   while (retry > 0) {
     try {
@@ -372,7 +395,11 @@ const tryUpdateResult = async (logger: winston.Logger, page: Page, start: number
   return null;
 };
 
-const updateResult = async (logger: winston.Logger, page: Page, start :number) => {
+const updateResult = async (
+  logger: winston.Logger,
+  page: Page,
+  start: number
+) => {
   await page.waitForSelector(".paginator");
   await sleep(1000);
   const _searchResult = await parseSearchResults(page);
@@ -500,9 +527,9 @@ const nextAndCrawl = async (
   page: Page,
   searchResult: any,
   pageCount: number,
-  dataRange: string,
+  dataRange: string
 ) => {
-  const startTime = new Date()
+  const startTime = new Date();
   if (pageCount > 1) {
     const _searchResult = await tryClickNextPage(logger, page, searchResult);
     if (!_searchResult) return null;
@@ -510,7 +537,7 @@ const nextAndCrawl = async (
   }
   const products = await getProducts(logger, page);
   await tryCreateBulk(products);
-  await tryUpdateCrawl(dataRange, products.length, false)
+  await tryUpdateCrawl(dataRange, products.length, false);
   const endTime = new Date();
   logSearchResult(logger, searchResult, products.length, startTime, endTime);
   return searchResult;
@@ -521,7 +548,7 @@ async function tryNextAndCrawl(
   page: Page,
   searchResult: any,
   pageCount: number,
-  dataRange: string,
+  dataRange: string
 ) {
   try {
     return await nextAndCrawl(logger, page, searchResult, pageCount, dataRange);
@@ -536,22 +563,24 @@ const logSearchResult = (
   searchResult: any,
   done: number,
   startTime?: Date,
-  endTime?: Date,
+  endTime?: Date
 ) => {
   let seconds = 0;
   if (startTime && endTime) {
-    seconds = Math.floor((endTime.getTime()/1000 - startTime.getTime()/1000));
+    seconds = Math.floor(endTime.getTime() / 1000 - startTime.getTime() / 1000);
   }
 
   logger.info(
-    `page: ${searchResult.start + done - 1}/${searchResult.total} (${done}) seconds: ${seconds}`
+    `page: ${searchResult.start + done - 1}/${
+      searchResult.total
+    } (${done}) seconds: ${seconds}`
   );
 };
 
 async function newPage(b: Browser, proxy: Proxy | null) {
   const page = await b.newPage();
   // do not forget to put "await" before async functions
-  
+
   if (proxy) {
     await page.authenticate({
       // username: "1mdXkbAvM",
@@ -588,7 +617,7 @@ async function searchWithBrowser(
   let searchResult;
   try {
     if (proxy) {
-      logger.debug("proxy server: " + proxy.server)
+      logger.debug("proxy server: " + proxy.server);
     }
 
     const page = await newPage(b, proxy);
@@ -621,7 +650,7 @@ async function searchWithBrowser(
       }
     }
   } catch (e: any) {
-    logger.error(e.message);
+    logger.debug(e.message);
   }
   if (searchResult) {
     return [searchResult.start, isEnd, searchResult.total];
@@ -634,17 +663,19 @@ export function getProxy(): Proxy | null {
   return null;
 }
 
-async function createBrowser(headless: boolean): Promise<[Browser, Proxy | null]> {
+async function createBrowser(
+  headless: boolean
+): Promise<[Browser, Proxy | null]> {
   const proxy = getProxy();
   const args = [];
   if (proxy) {
-    args.push(`--proxy-server=${proxy}`)
+    args.push(`--proxy-server=${proxy}`);
   }
   const browser = await puppeteer.launch({
     headless,
     ignoreDefaultArgs: ["--disable-extensions", "--enable-automation"],
     args: [
-     ...args,
+      ...args,
       "--disable-web-security",
       "--disable-features=IsolateOrigins,site-per-process",
       "--allow-running-insecure-content",
@@ -698,10 +729,13 @@ async function search(dateRange: string, headless: boolean) {
       await updateCrawl(dateRange, 0, isEnd);
       const dbCount = await countDate(dateRange);
       const done = isEnd ? total : productNumber;
-      const finished = isEnd ? "finished": "retrying"
+      const finished = isEnd ? "finished" : "retrying";
       logger.info(`crawled: ${done}/${total} (${finished}) dbcount:${dbCount}`);
+      if (isEnd && done != dbCount) {
+        process.exit(1)
+      }
     } catch (e: any) {
-      logger.error(e.message);
+      logger.debug(e.message);
     }
   }
 }
