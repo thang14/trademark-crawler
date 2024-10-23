@@ -4,12 +4,12 @@ import puppeteer from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
 import { Browser, Cookie, ElementHandle, Page } from "puppeteer";
-import { tryCreateBulk } from "./elasticsearch";
+import { countDate, tryCreateBulk } from "./elasticsearch";
 import { TrademarkInfo } from "./interface";
 import minimist from "minimist";
 import winston, { log } from "winston";
 import { createLogger, setLevel } from "./logger";
-import { createDateRange, getQueue, updateCrawl } from "./leveldb";
+import { createDateRange, getCrawledItemsCount, getQueue, tryUpdateCrawl, updateCrawl } from "./leveldb";
 
 puppeteer.use(Stealth());
 
@@ -17,6 +17,12 @@ interface SearchResult {
   start: number;
   end: number;
   total: number;
+}
+
+interface Proxy {
+  server: string,
+  user: string,
+  password: string
 }
 
 // let _cookies: Cookie[];
@@ -248,6 +254,10 @@ async function showDetails(
   logger.debug("click show detail");
 }
 
+function isProduct(product: TrademarkInfo | undefined) {
+  return product && product.applicationNumber != "" && !product.applicationNumber.includes("${")
+}
+
 async function getProduct(
   logger: winston.Logger,
   page: Page,
@@ -261,12 +271,12 @@ async function getProduct(
       const product = await tryParseProduct(page);
       logger.debug(product?.applicationNumber);
       await backToSearch(logger, page);
-      if (product && !product.applicationNumber.includes("${")) {
-        return product;
+      if (isProduct(product)) {
+        return product!;
       }
+      retry--
     } catch (err: any) {
       errMsg = err;
-      logger.error(err.message);
       retry--;
     }
   }
@@ -489,8 +499,10 @@ const nextAndCrawl = async (
   logger: winston.Logger,
   page: Page,
   searchResult: any,
-  pageCount: number
+  pageCount: number,
+  dataRange: string,
 ) => {
+  const startTime = new Date()
   if (pageCount > 1) {
     const _searchResult = await tryClickNextPage(logger, page, searchResult);
     if (!_searchResult) return null;
@@ -498,7 +510,9 @@ const nextAndCrawl = async (
   }
   const products = await getProducts(logger, page);
   await tryCreateBulk(products);
-  logSearchResult(logger, searchResult, products.length);
+  await tryUpdateCrawl(dataRange, products.length, false)
+  const endTime = new Date();
+  logSearchResult(logger, searchResult, products.length, startTime, endTime);
   return searchResult;
 };
 
@@ -506,10 +520,11 @@ async function tryNextAndCrawl(
   logger: winston.Logger,
   page: Page,
   searchResult: any,
-  pageCount: number
+  pageCount: number,
+  dataRange: string,
 ) {
   try {
-    return await nextAndCrawl(logger, page, searchResult, pageCount);
+    return await nextAndCrawl(logger, page, searchResult, pageCount, dataRange);
   } catch {
     logger.debug("try next and crawl not successfull ");
     return null;
@@ -519,20 +534,33 @@ async function tryNextAndCrawl(
 const logSearchResult = (
   logger: winston.Logger,
   searchResult: any,
-  done: number
+  done: number,
+  startTime?: Date,
+  endTime?: Date,
 ) => {
+  let seconds = 0;
+  if (startTime && endTime) {
+    seconds = Math.floor((endTime.getTime()/1000 - startTime.getTime()/1000));
+  }
+
   logger.info(
-    `page: ${searchResult.start + done - 1}/${searchResult.total} (${done})`
+    `page: ${searchResult.start + done - 1}/${searchResult.total} (${done}) seconds: ${seconds}`
   );
 };
 
-async function newPage(b: Browser) {
+async function newPage(b: Browser, proxy: Proxy | null) {
   const page = await b.newPage();
   // do not forget to put "await" before async functions
-  await page.authenticate({
-    username: "1mdXkbAvM",
-    password: "CaIOGn",
-  });
+  
+  if (proxy) {
+    await page.authenticate({
+      // username: "1mdXkbAvM",
+      // password: "CaIOGn",
+      username: proxy.user,
+      password: proxy.password,
+    });
+  }
+
   const customUserAgent =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
   await page.setUserAgent(customUserAgent);
@@ -551,6 +579,7 @@ async function newPage(b: Browser) {
 async function searchWithBrowser(
   logger: winston.Logger,
   b: Browser,
+  proxy: Proxy | null,
   dataRange: string,
   start: number
 ): Promise<[number, boolean, number]> {
@@ -558,7 +587,11 @@ async function searchWithBrowser(
   let isEnd = false;
   let searchResult;
   try {
-    const page = await newPage(b);
+    if (proxy) {
+      logger.debug("proxy server: " + proxy.server)
+    }
+
+    const page = await newPage(b, proxy);
     const noDataFound = await typeAndSubmitSearch(page, dataRange);
     if (noDataFound) {
       logger.debug("nodata found: " + dataRange);
@@ -577,15 +610,18 @@ async function searchWithBrowser(
         logger,
         page,
         searchResult,
-        pageCount
+        pageCount,
+        dataRange
       );
       if (_searchResult) {
         isEnd = _searchResult.end == searchResult.total;
         searchResult = _searchResult;
+      } else {
+        break;
       }
     }
   } catch (e: any) {
-    console.error(e);
+    logger.error(e.message);
   }
   if (searchResult) {
     return [searchResult.start, isEnd, searchResult.total];
@@ -594,12 +630,21 @@ async function searchWithBrowser(
   }
 }
 
-function createBrowser(headless: boolean) {
-  return puppeteer.launch({
+export function getProxy(): Proxy | null {
+  return null;
+}
+
+async function createBrowser(headless: boolean): Promise<[Browser, Proxy | null]> {
+  const proxy = getProxy();
+  const args = [];
+  if (proxy) {
+    args.push(`--proxy-server=${proxy}`)
+  }
+  const browser = await puppeteer.launch({
     headless,
     ignoreDefaultArgs: ["--disable-extensions", "--enable-automation"],
     args: [
-      "--proxy-server=118.69.98.59:16524",
+     ...args,
       "--disable-web-security",
       "--disable-features=IsolateOrigins,site-per-process",
       "--allow-running-insecure-content",
@@ -630,33 +675,33 @@ function createBrowser(headless: boolean) {
       "--enable-low-end-device-mode",
     ],
   });
+  return [browser, proxy];
 }
 
 async function search(dateRange: string, headless: boolean) {
   const logger = createLogger(`range: ${dateRange}`);
-  let nextProductNumber = 0;
+  let nextProductNumber = await getCrawledItemsCount(dateRange);
   let isRunning = true;
   while (isRunning) {
     try {
-      const browser = await createBrowser(headless);
+      const [browser, proxy] = await createBrowser(headless);
       const [productNumber, isEnd, total] = await searchWithBrowser(
         logger,
         browser,
+        proxy,
         dateRange,
         nextProductNumber
       );
       isRunning = !isEnd;
       nextProductNumber = productNumber;
       await browser.close();
-      if (isEnd) {
-        await updateCrawl(dateRange, total);
-      }
-
+      await updateCrawl(dateRange, 0, isEnd);
+      const dbCount = await countDate(dateRange);
       const done = isEnd ? total : productNumber;
       const finished = isEnd ? "finished": "retrying"
-      logger.info(`crawled: ${done}/${total} (${finished})`);
-    } catch (e) {
-      console.log(e);
+      logger.info(`crawled: ${done}/${total} (${finished}) dbcount:${dbCount}`);
+    } catch (e: any) {
+      logger.error(e.message);
     }
   }
 }

@@ -2,6 +2,7 @@ import { Client } from "@elastic/elasticsearch";
 import { TrademarkInfo } from "./interface";
 import md5 from "md5";
 import winston, { error } from "winston";
+import { SearchTotalHits } from "@elastic/elasticsearch/lib/api/types";
 const client = new Client({
   node: "http://localhost:9200",
 });
@@ -256,7 +257,7 @@ export async function createBulk(trademarks: TrademarkInfo[]) {
   }
 }
 export async function tryCreateBulk(trademarks: TrademarkInfo[]) {
-  let retry = 1;
+  let retry = 3;
   while (retry > 0) {
     try {
       return await createBulk(trademarks);
@@ -272,19 +273,25 @@ function parseDate(dateString: string | undefined): Date | null {
   const [day, month, year] = dateString.split(".").map(Number);
   return new Date(Date.UTC(year, month - 1, day)); // Tháng bắt đầu từ 0 (0 = Tháng 1)
 }
-export async function count(): Promise<number> {
+export async function countDate(dateRange: string): Promise<number> {
+  const dates = dateRange.split("TO").map((d) => d.trim());
   const res = await client.search({
     index: "trademarks",
     query: {
-      range: {
-        application_date: {
-          // Thay đổi 'dateField' với trường ngày thực tế trong index của bạn
-          gte: "2024-05-08", // Ngày bắt đầu (greater than or equal)
-          lte: "2024-05-09", // Ngày kết thúc (less than or equal)
-        },
+      bool: {
+        must: [
+          {
+            range: {
+              application_date: {
+                gte: dates[0],
+                lte: dates[1],
+              },
+            },
+          },
+        ],
       },
     },
   });
-  console.log(res.hits.total);
-  return Number(res.hits.total);
+  const total = res.hits.total as SearchTotalHits;
+  return Number(total.value);
 }
