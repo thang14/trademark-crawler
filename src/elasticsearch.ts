@@ -61,7 +61,7 @@ export async function createIndex() {
           tokenizer: {
             tokenizer: "tokenizer",
             type: "custom",
-            filter: ["lowercase"]
+            filter: ["lowercase"],
           },
         },
         tokenizer: {
@@ -254,7 +254,6 @@ export async function tryCreateBulk(trademarks: TrademarkInfo[]) {
 }
 
 export async function tryDeleteBulk(trademarks: TrademarkInfo[]) {
-
   let retry = 3;
   while (retry > 0) {
     try {
@@ -272,6 +271,39 @@ export async function bulkDelete(trademarks: TrademarkInfo[]) {
     operations: trademarks.map((t) => {
       return { delete: { _index: "trademarks", _id: t.applicationNumber } };
     }),
+  });
+}
+
+export async function tryDeleteByDaterange(dateRange: string) {
+  let retry = 3;
+  while (retry > 0) {
+    try {
+      return await deleteByDaterange(dateRange);
+    } catch (e) {
+      console.error(e);
+      retry--;
+    }
+  }
+}
+
+export async function deleteByDaterange(dateRange: string) {
+  const dates = dateRange.split("TO").map((d) => d.trim());
+  return client.deleteByQuery({
+    index: "trademarks",
+    query: {
+      bool: {
+        must: [
+          {
+            range: {
+              application_date: {
+                gte: dates[0],
+                lte: dates[1],
+              },
+            },
+          },
+        ],
+      },
+    },
   });
 }
 

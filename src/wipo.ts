@@ -4,7 +4,12 @@ import puppeteer from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import fs, { fsync } from "fs";
 import { Browser, Cookie, ElementHandle, Page } from "puppeteer";
-import { countDate, tryCreateBulk, tryDeleteBulk } from "./elasticsearch";
+import {
+  countDate,
+  tryCreateBulk,
+  tryDeleteBulk,
+  tryDeleteByDaterange,
+} from "./elasticsearch";
 import { TrademarkInfo } from "./interface";
 import minimist from "minimist";
 import winston, { log } from "winston";
@@ -288,7 +293,7 @@ async function getProduct(
   page: Page,
   handle: ElementHandle<HTMLTableRowElement>,
   dateRanges: string[],
-  lastProduct: TrademarkInfo | null,
+  lastProduct: TrademarkInfo | null
 ): Promise<TrademarkInfo> {
   let retry = 5;
   let errMsg;
@@ -321,7 +326,13 @@ async function getProducts(
   const products: TrademarkInfo[] = [];
   let lastProduct: TrademarkInfo | null = null;
   for (let handle of handles) {
-    lastProduct = await getProduct(logger, page, handle, dateRange, lastProduct);
+    lastProduct = await getProduct(
+      logger,
+      page,
+      handle,
+      dateRange,
+      lastProduct
+    );
     products.push(lastProduct);
   }
   return products;
@@ -563,7 +574,7 @@ const nextAndCrawl = async (
   await tryCreateBulk(products);
   const dbcount = await countDate(dataRange);
   if (searchResult.end > dbcount) {
-    await tryDeleteBulk(products);
+    await tryDeleteByDaterange(dataRange);
     return null;
   }
   await tryUpdateCrawl(dataRange, dbcount, false);
@@ -742,7 +753,7 @@ async function search(dateRange: string, headless: boolean, index: number) {
       const proxyServer = proxy ? proxy.server : "192.16.11.1:57432";
       const logger = createLogger(`range: ${dateRange} proxy:` + proxyServer);
 
-      const [productNumber, isEnd, total] = await searchWithBrowser(
+      const [_, isEnd, total] = await searchWithBrowser(
         logger,
         browser,
         proxy,
@@ -750,9 +761,9 @@ async function search(dateRange: string, headless: boolean, index: number) {
         nextProductNumber
       );
       isRunning = !isEnd;
-      nextProductNumber = productNumber ? productNumber : nextProductNumber;
       await browser.close();
       const dbCount = await countDate(dateRange);
+      nextProductNumber = dbCount;
       if (isEnd) {
         if (dbCount >= total) {
           await updateCrawl(dateRange, 0, isEnd);
