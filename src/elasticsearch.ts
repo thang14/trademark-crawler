@@ -258,7 +258,7 @@ export async function tryDeleteBulk(trademarks: TrademarkInfo[]) {
   let retry = 3;
   while (retry > 0) {
     try {
-      await bulkDelete(trademarks);
+      return await bulkDelete(trademarks);
     } catch (e) {
       console.error(e);
       retry--;
