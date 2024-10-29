@@ -3,7 +3,7 @@ import { TrademarkInfo } from "./interface";
 import md5 from "md5";
 import { SearchTotalHits } from "@elastic/elasticsearch/lib/api/types";
 const client = new Client({
-  node: "http://localhost:9200",
+  node: process.env.ELASTICSEARCH_HOST,
 });
 
 export async function createIndex() {
