@@ -270,14 +270,16 @@ async function showDetails(
 
 function isProduct(
   product: TrademarkInfo | null | undefined,
-  dateRange: string[]
+  dateRange: string[],
+  lastProduct: TrademarkInfo | null
 ) {
   return (
     product &&
     product.applicationNumber &&
     product.applicationDate &&
     dateRange.includes(product.applicationDate) &&
-    !product.applicationNumber.includes("${")
+    !product.applicationNumber.includes("${") &&
+    product.applicationNumber != lastProduct?.applicationNumber
   );
 }
 
@@ -285,7 +287,8 @@ async function getProduct(
   logger: winston.Logger,
   page: Page,
   handle: ElementHandle<HTMLTableRowElement>,
-  dateRanges: string[]
+  dateRanges: string[],
+  lastProduct: TrademarkInfo,
 ): Promise<TrademarkInfo> {
   let retry = 5;
   let errMsg;
@@ -297,7 +300,7 @@ async function getProduct(
         `${product?.applicationNumber} | ${product?.applicationDate}`
       );
       await backToSearch(logger, page);
-      if (isProduct(product, dateRanges)) {
+      if (isProduct(product, dateRanges, lastProduct)) {
         return product!;
       }
       retry--;
@@ -316,8 +319,10 @@ async function getProducts(
 ): Promise<TrademarkInfo[]> {
   const handles = await page.$$("#resultWrapper tbody tr");
   const products: TrademarkInfo[] = [];
+  let lastProduct: TrademarkInfo;
   for (let handle of handles) {
-    products.push(await getProduct(logger, page, handle, dateRange));
+    lastProduct = await getProduct(logger, page, handle, dateRange, lastProduct);
+    products.push(lastProduct);
   }
   return products;
 }
