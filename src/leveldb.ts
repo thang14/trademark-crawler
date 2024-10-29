@@ -63,8 +63,8 @@ export async function getQueue() {
   return queues;
 }
 
-export async function  getCrawledItemsCount(dateRange: string) {
-  const c =  await getCrawl(dateRange);
+export async function getCrawledItemsCount(dateRange: string) {
+  const c = await getCrawl(dateRange);
   return c.itemsCount;
 }
 
@@ -73,10 +73,16 @@ export async function updateCrawl(
   itemsCount: number,
   crawled: boolean
 ) {
-  const item = await getCrawl(dateRange);
   await db.put(key(dateRange), {
-    itemsCount: item.itemsCount + itemsCount,
+    itemsCount: itemsCount,
     crawled: crawled,
+  });
+}
+
+export async function resetCrawl(dateRange: string) {
+  await db.put(key(dateRange), {
+    itemsCount: 0,
+    crawled: false,
   });
 }
 

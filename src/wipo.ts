@@ -4,7 +4,7 @@ import puppeteer from "puppeteer-extra";
 import Stealth from "puppeteer-extra-plugin-stealth";
 import fs, { fsync } from "fs";
 import { Browser, Cookie, ElementHandle, Page } from "puppeteer";
-import { countDate, tryCreateBulk } from "./elasticsearch";
+import { countDate, tryCreateBulk, tryDeleteBulk } from "./elasticsearch";
 import { TrademarkInfo } from "./interface";
 import minimist from "minimist";
 import winston, { log } from "winston";
@@ -13,22 +13,21 @@ import {
   createDateRange,
   getCrawledItemsCount,
   getQueue,
+  resetCrawl,
   tryUpdateCrawl,
   updateCrawl,
 } from "./leveldb";
+import { getProxy, loadProxy, Proxy } from "./proxy";
 
 puppeteer.use(Stealth());
+
+export let runQueues: any = {};
+let maxQueue = 0;
 
 interface SearchResult {
   start: number;
   end: number;
   total: number;
-}
-
-interface Proxy {
-  server: string;
-  user: string;
-  password: string;
 }
 
 // let _cookies: Cookie[];
@@ -61,15 +60,16 @@ async function tryParseProduct(page: Page) {
   } catch {}
 }
 
-async function  checkProductFinal(page: Page) {
-  const text =  await page.evaluate(() => {
-    return document.querySelector("#detailsPanelContentDiv .detail-wrapper")?.textContent
+async function checkProductFinal(page: Page) {
+  const text = await page.evaluate(() => {
+    return document.querySelector("#detailsPanelContentDiv .detail-wrapper")
+      ?.textContent;
   });
   return !text?.includes("${");
 }
 
 async function parseProduct(page: Page) {
-  if (!await checkProductFinal(page)) return null;
+  if (!(await checkProductFinal(page))) return null;
   // Bóc tách dữ liệu từ HTML
   return await page.evaluate(() => {
     const rows = document.querySelectorAll(".detail-container > .row");
@@ -268,11 +268,15 @@ async function showDetails(
   logger.debug("click show detail");
 }
 
-function isProduct(product: TrademarkInfo | null | undefined) {
+function isProduct(
+  product: TrademarkInfo | null | undefined,
+  dateRange: string[]
+) {
   return (
     product &&
     product.applicationNumber &&
     product.applicationDate &&
+    dateRange.includes(product.applicationDate) &&
     !product.applicationNumber.includes("${")
   );
 }
@@ -280,7 +284,8 @@ function isProduct(product: TrademarkInfo | null | undefined) {
 async function getProduct(
   logger: winston.Logger,
   page: Page,
-  handle: ElementHandle<HTMLTableRowElement>
+  handle: ElementHandle<HTMLTableRowElement>,
+  dateRanges: string[]
 ): Promise<TrademarkInfo> {
   let retry = 5;
   let errMsg;
@@ -288,9 +293,11 @@ async function getProduct(
     try {
       await showDetails(logger, page, handle);
       const product = await tryParseProduct(page);
-      logger.debug(`${product?.applicationNumber} | ${product?.applicationDate}`);
+      logger.debug(
+        `${product?.applicationNumber} | ${product?.applicationDate}`
+      );
       await backToSearch(logger, page);
-      if (isProduct(product)) {
+      if (isProduct(product, dateRanges)) {
         return product!;
       }
       retry--;
@@ -304,12 +311,13 @@ async function getProduct(
 
 async function getProducts(
   logger: winston.Logger,
-  page: Page
+  page: Page,
+  dateRange: string[]
 ): Promise<TrademarkInfo[]> {
   const handles = await page.$$("#resultWrapper tbody tr");
   const products: TrademarkInfo[] = [];
   for (let handle of handles) {
-    products.push(await getProduct(logger, page, handle));
+    products.push(await getProduct(logger, page, handle, dateRange));
   }
   return products;
 }
@@ -423,6 +431,10 @@ async function navigateThroughPages(
   let searchResult = await tryUpdateResult(logger, page, start);
   if (!searchResult) return null;
 
+  if (start >= searchResult.total) {
+    return searchResult;
+  }
+
   if (searchResult.end > start) {
     return searchResult;
   }
@@ -434,7 +446,7 @@ async function navigateThroughPages(
       searchResult = await tryClickNextPage(logger, page, searchResult);
     }
     if (!searchResult) return null;
-    logSearchResult(logger, searchResult, 0);
+    logSearchResult(logger, searchResult, start);
     if (searchResult.end > start) {
       return searchResult;
     }
@@ -535,11 +547,24 @@ const nextAndCrawl = async (
     if (!_searchResult) return null;
     searchResult = _searchResult;
   }
-  const products = await getProducts(logger, page);
+  const products = await getProducts(
+    logger,
+    page,
+    dataRange.split("TO").map((d) => {
+      const [year, month, day] = d.trim().split("-");
+      return `${day}.${month}.${year}`;
+    })
+  );
   await tryCreateBulk(products);
-  await tryUpdateCrawl(dataRange, products.length, false);
+  const dbcount = await countDate(dataRange);
+  if (searchResult.end > dbcount) {
+    await tryDeleteBulk(products);
+    logger.error(JSON.stringify(products, null, 2));
+    process.exit(1);
+  }
+  await tryUpdateCrawl(dataRange, dbcount, false);
   const endTime = new Date();
-  logSearchResult(logger, searchResult, products.length, startTime, endTime);
+  logSearchResult(logger, searchResult, dbcount, startTime, endTime);
   return searchResult;
 };
 
@@ -569,12 +594,8 @@ const logSearchResult = (
   if (startTime && endTime) {
     seconds = Math.floor(endTime.getTime() / 1000 - startTime.getTime() / 1000);
   }
-
-  logger.info(
-    `page: ${searchResult.start + done - 1}/${
-      searchResult.total
-    } (${done}) seconds: ${seconds}`
-  );
+  const lMsg = `progress: ${done}/${searchResult.total} page: ${searchResult.start}/${searchResult.end} ${seconds}s`;
+  logger.info(lMsg);
 };
 
 async function newPage(b: Browser, proxy: Proxy | null) {
@@ -616,10 +637,6 @@ async function searchWithBrowser(
   let isEnd = false;
   let searchResult;
   try {
-    if (proxy) {
-      logger.debug("proxy server: " + proxy.server);
-    }
-
     const page = await newPage(b, proxy);
     const noDataFound = await typeAndSubmitSearch(page, dataRange);
     if (noDataFound) {
@@ -632,7 +649,11 @@ async function searchWithBrowser(
       return [0, false, 0];
     }
 
-    logSearchResult(logger, searchResult, 0);
+    if (start >= searchResult.total) {
+      return [start, true, searchResult.total];
+    }
+    runQueues[dataRange] = searchResult;
+    logSearchResult(logger, searchResult, start);
     while (!isEnd) {
       pageCount++;
       const _searchResult = await tryNextAndCrawl(
@@ -642,6 +663,7 @@ async function searchWithBrowser(
         pageCount,
         dataRange
       );
+      runQueues[dataRange] = searchResult;
       if (_searchResult) {
         isEnd = _searchResult.end == searchResult.total;
         searchResult = _searchResult;
@@ -659,17 +681,14 @@ async function searchWithBrowser(
   }
 }
 
-export function getProxy(): Proxy | null {
-  return null;
-}
-
 async function createBrowser(
+  i: number,
   headless: boolean
 ): Promise<[Browser, Proxy | null]> {
-  const proxy = getProxy();
+  const proxy = getProxy(i);
   const args = [];
   if (proxy) {
-    args.push(`--proxy-server=${proxy}`);
+    args.push(`--proxy-server=${proxy.server}`);
   }
   const browser = await puppeteer.launch({
     headless,
@@ -709,13 +728,16 @@ async function createBrowser(
   return [browser, proxy];
 }
 
-async function search(dateRange: string, headless: boolean) {
-  const logger = createLogger(`range: ${dateRange}`);
-  let nextProductNumber = await getCrawledItemsCount(dateRange);
+async function search(dateRange: string, headless: boolean, index: number) {
+  let nextProductNumber = await countDate(dateRange);
   let isRunning = true;
+  runQueues[dateRange] = {};
   while (isRunning) {
     try {
-      const [browser, proxy] = await createBrowser(headless);
+      const [browser, proxy] = await createBrowser(index, headless);
+      const proxyServer = proxy ? proxy.server : "192.16.11.1:57432";
+      const logger = createLogger(`range: ${dateRange} proxy:` + proxyServer);
+
       const [productNumber, isEnd, total] = await searchWithBrowser(
         logger,
         browser,
@@ -724,35 +746,47 @@ async function search(dateRange: string, headless: boolean) {
         nextProductNumber
       );
       isRunning = !isEnd;
-      nextProductNumber = productNumber;
+      nextProductNumber = productNumber ? productNumber : nextProductNumber;
       await browser.close();
-      await updateCrawl(dateRange, 0, isEnd);
       const dbCount = await countDate(dateRange);
-      const done = isEnd ? total : productNumber;
-      const finished = isEnd ? "finished" : "retrying";
-      logger.info(`crawled: ${done}/${total} (${finished}) dbcount:${dbCount}`);
-      if (isEnd && done != dbCount) {
-        process.exit(1)
+      if (isEnd) {
+        if (dbCount >= total) {
+          await updateCrawl(dateRange, 0, isEnd);
+        } else {
+          nextProductNumber = 0;
+          await resetCrawl(dateRange);
+          isRunning = true;
+          process.exit(1);
+        }
       }
+      const finished = !isRunning ? "finished" : "retrying";
+      logger.info(
+        `crawled: ${dbCount}/${total} (${finished}), next: ${nextProductNumber}`
+      );
+      delete runQueues[dateRange];
     } catch (e: any) {
-      logger.debug(e.message);
+      console.error(e.message);
     }
   }
 }
 
 export async function crawl() {
   const args = minimist(process.argv.slice(2));
-  setLevel(args.loglevel || "info");
+  setLevel(args.debug ? "debug" : "info");
   if (args.daterange) {
     await createDateRange(args.daterange);
     console.log("created date range", args.daterange);
   }
+  await loadProxy();
   const queues = await getQueue();
+  maxQueue = args.limit || 1;
   console.log("queues:", queues.length);
-  const limit = pLimit(args.limit || 1);
+  const limit = pLimit(maxQueue);
   const promises: any[] = [];
   for (let i = 0; i < queues.length; i++) {
-    promises.push(limit(() => search(queues[i].key, args.open ? false : true))); // Gọi hàm search với ngày hiện tại
+    promises.push(
+      limit(() => search(queues[i].key, args.open ? false : true, i))
+    ); // Gọi hàm search với ngày hiện tại
   }
 
   try {

@@ -1,7 +1,6 @@
 import { Client } from "@elastic/elasticsearch";
 import { TrademarkInfo } from "./interface";
 import md5 from "md5";
-import winston, { error } from "winston";
 import { SearchTotalHits } from "@elastic/elasticsearch/lib/api/types";
 const client = new Client({
   node: "http://localhost:9200",
@@ -62,6 +61,7 @@ export async function createIndex() {
           tokenizer: {
             tokenizer: "tokenizer",
             type: "custom",
+            filter: ["lowercase"]
           },
         },
         tokenizer: {
@@ -157,23 +157,8 @@ export async function createIndex() {
   console.log("create index scueess");
 }
 
-let created: any = {};
-
 function createDocument(trademark: TrademarkInfo) {
   const ownerId = md5(trademark.applicant.name + trademark.applicant.address);
-
-  if (created[trademark.applicationNumber]) {
-    created[trademark.applicationNumber]++;
-    console.log(
-      "duplicate document id ",
-      trademark.applicationNumber,
-      "count",
-      created[trademark.applicationNumber]
-    );
-  } else {
-    created[trademark.applicationNumber] = 1;
-  }
-
   const dataset = [];
   dataset.push({ index: { _index: "owners", _id: ownerId } });
   dataset.push({
@@ -266,6 +251,28 @@ export async function tryCreateBulk(trademarks: TrademarkInfo[]) {
       retry--;
     }
   }
+}
+
+export async function tryDeleteBulk(trademarks: TrademarkInfo[]) {
+
+  let retry = 3;
+  while (retry > 0) {
+    try {
+      await bulkDelete(trademarks);
+    } catch (e) {
+      console.error(e);
+      retry--;
+    }
+  }
+}
+
+export async function bulkDelete(trademarks: TrademarkInfo[]) {
+  return client.bulk({
+    refresh: true,
+    operations: trademarks.map((t) => {
+      return { delete: { _index: "trademarks", _id: t.applicationNumber } };
+    }),
+  });
 }
 
 function parseDate(dateString: string | undefined): Date | null {
