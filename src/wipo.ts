@@ -564,8 +564,7 @@ const nextAndCrawl = async (
   const dbcount = await countDate(dataRange);
   if (searchResult.end > dbcount) {
     await tryDeleteBulk(products);
-    logger.error(JSON.stringify(products, null, 2));
-    process.exit(1);
+    return null;
   }
   await tryUpdateCrawl(dataRange, dbcount, false);
   const endTime = new Date();
