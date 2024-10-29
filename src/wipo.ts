@@ -288,7 +288,7 @@ async function getProduct(
   page: Page,
   handle: ElementHandle<HTMLTableRowElement>,
   dateRanges: string[],
-  lastProduct: TrademarkInfo,
+  lastProduct: TrademarkInfo | null,
 ): Promise<TrademarkInfo> {
   let retry = 5;
   let errMsg;
@@ -319,7 +319,7 @@ async function getProducts(
 ): Promise<TrademarkInfo[]> {
   const handles = await page.$$("#resultWrapper tbody tr");
   const products: TrademarkInfo[] = [];
-  let lastProduct: TrademarkInfo;
+  let lastProduct: TrademarkInfo | null = null;
   for (let handle of handles) {
     lastProduct = await getProduct(logger, page, handle, dateRange, lastProduct);
     products.push(lastProduct);
