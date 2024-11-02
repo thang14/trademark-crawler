@@ -11,42 +11,46 @@ export async function createIndex() {
   // await client.indices.delete({ index: "owners" });
   // await client.indices.delete({ index: "trademarks" });
 
-  await client.indices.create({
-    index: "represents",
-    mappings: {
-      properties: {
-        id: {
-          type: "keyword",
-        },
-        name: {
-          type: "text",
-        },
-        address: {
-          type: "text",
-        },
-      },
-    },
+  // await client.indices.create({
+  //   index: "represents3",
+  //   mappings: {
+  //     properties: {
+  //       id: {
+  //         type: "keyword",
+  //       },
+  //       name: {
+  //         type: "text",
+  //       },
+  //       address: {
+  //         type: "text",
+  //       },
+  //     },
+  //   },
+  // });
+
+  // await client.indices.create({
+  //   index: "owners3",
+  //   mappings: {
+  //     properties: {
+  //       id: {
+  //         type: "keyword",
+  //       },
+  //       name: {
+  //         type: "text",
+  //       },
+  //       address: {
+  //         type: "text",
+  //       },
+  //     },
+  //   },
+  // });
+
+  await client.indices.delete({
+    index: "trademarks5",
   });
 
   await client.indices.create({
-    index: "owners",
-    mappings: {
-      properties: {
-        id: {
-          type: "keyword",
-        },
-        name: {
-          type: "text",
-        },
-        address: {
-          type: "text",
-        },
-      },
-    },
-  });
-
-  await client.indices.create({
-    index: "trademarks",
+    index: "trademarks5",
     settings: {
       similarity: {
         similarity: {
@@ -58,12 +62,23 @@ export async function createIndex() {
       },
       analysis: {
         analyzer: {
-          tokenizer: {
-            tokenizer: "tokenizer",
+          lowercase: {
+            tokenizer: "standard",
             type: "custom",
             filter: ["lowercase"],
           },
+          tokenizer: {
+            tokenizer: "tokenizer",
+            type: "custom",
+            filter: ["lowercase", "asciifolding"],
+          },
+          standard: {
+            type: "custom",
+            tokenizer: "standard",
+            filter: ["lowercase", "asciifolding"],
+          },
         },
+
         tokenizer: {
           tokenizer: {
             type: "ngram",
@@ -80,6 +95,18 @@ export async function createIndex() {
           type: "text",
           similarity: "similarity",
           analyzer: "tokenizer",
+          fields: {
+            vi: {
+              type: "text",
+              similarity: "similarity",
+              analyzer: "lowercase",
+            },
+            standard: {
+              type: "text",
+              similarity: "similarity",
+              analyzer: "standard",
+            },
+          },
         },
         logo: {
           type: "keyword",
@@ -115,7 +142,8 @@ export async function createIndex() {
               type: "keyword",
             },
             description: {
-              type: "keyword",
+              type: "text",
+              analyzer: "standard",
             },
           },
         },
@@ -151,10 +179,36 @@ export async function createIndex() {
         translation: {
           type: "keyword",
         },
+        source: {
+          type: "keyword",
+        },
+        destination: {
+          type: "keyword",
+        },
       },
     },
   });
+
+  await client.reindex({
+    source: {
+      index: "trademarks",
+    },
+    dest: {
+      index: "trademarks5",
+    },
+    timeout: "30m",
+  });
   console.log("create index scueess");
+}
+
+let dateRangeBy = "application_date";
+
+export function setDateRangeBy(by: string) {
+  dateRangeBy = by;
+}
+
+export function getDateRangeBy() {
+  return dateRangeBy;
 }
 
 function createDocument(trademark: TrademarkInfo) {
@@ -253,59 +307,59 @@ export async function tryCreateBulk(trademarks: TrademarkInfo[]) {
   }
 }
 
-export async function tryDeleteBulk(trademarks: TrademarkInfo[]) {
-  let retry = 3;
-  while (retry > 0) {
-    try {
-      return await bulkDelete(trademarks);
-    } catch (e) {
-      console.error(e);
-      retry--;
-    }
-  }
-}
+// async function tryDeleteBulk(trademarks: TrademarkInfo[]) {
+//   let retry = 3;
+//   while (retry > 0) {
+//     try {
+//       return await bulkDelete(trademarks);
+//     } catch (e) {
+//       console.error(e);
+//       retry--;
+//     }
+//   }
+// }
 
-export async function bulkDelete(trademarks: TrademarkInfo[]) {
-  return client.bulk({
-    refresh: true,
-    operations: trademarks.map((t) => {
-      return { delete: { _index: "trademarks", _id: t.applicationNumber } };
-    }),
-  });
-}
+// async function bulkDelete(trademarks: TrademarkInfo[]) {
+//   return client.bulk({
+//     refresh: true,
+//     operations: trademarks.map((t) => {
+//       return { delete: { _index: "trademarks", _id: t.applicationNumber } };
+//     }),
+//   });
+// }
 
-export async function tryDeleteByDaterange(dateRange: string) {
-  let retry = 3;
-  while (retry > 0) {
-    try {
-      return await deleteByDaterange(dateRange);
-    } catch (e) {
-      console.error(e);
-      retry--;
-    }
-  }
-}
+// export async function tryDeleteByDaterange(dateRange: string) {
+//   let retry = 3;
+//   while (retry > 0) {
+//     try {
+//       return await deleteByDaterange(dateRange);
+//     } catch (e) {
+//       console.error(e);
+//       retry--;
+//     }
+//   }
+// }
 
-export async function deleteByDaterange(dateRange: string) {
-  const dates = dateRange.split("TO").map((d) => d.trim());
-  return client.deleteByQuery({
-    index: "trademarks",
-    query: {
-      bool: {
-        must: [
-          {
-            range: {
-              application_date: {
-                gte: dates[0],
-                lte: dates[1],
-              },
-            },
-          },
-        ],
-      },
-    },
-  });
-}
+// export async function deleteByDaterange(dateRange: string) {
+//   const dates = dateRange.split("TO").map((d) => d.trim());
+//   return client.deleteByQuery({
+//     index: "trademarks",
+//     query: {
+//       bool: {
+//         must: [
+//           {
+//             range: {
+//               [dateRangeBy]: {
+//                 gte: dates[0],
+//                 lte: dates[1],
+//               },
+//             },
+//           },
+//         ],
+//       },
+//     },
+//   });
+// }
 
 function parseDate(dateString: string | undefined): Date | null {
   if (!dateString) return null;
@@ -321,10 +375,44 @@ export async function countDate(dateRange: string): Promise<number> {
         must: [
           {
             range: {
-              application_date: {
+              [dateRangeBy]: {
                 gte: dates[0],
                 lte: dates[1],
               },
+            },
+          },
+        ],
+      },
+    },
+  });
+  const total = res.hits.total as SearchTotalHits;
+  return Number(total.value);
+}
+
+export async function countDate2(dateRange: string): Promise<number> {
+  const dates = dateRange.split("TO").map((d) => d.trim());
+  const res = await client.search({
+    index: "trademarks",
+    query: {
+      bool: {
+        must: [
+          {
+            range: {
+              [dateRangeBy]: {
+                gte: dates[0],
+                lte: dates[1],
+              },
+            },
+          },
+          {
+            nested: {
+              path: "nices",
+              query: {
+                bool: {
+                  must: [{ match: { "nices.code": "5" } }],
+                },
+              },
+              score_mode: "avg",
             },
           },
         ],

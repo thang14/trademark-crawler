@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start:prod": "node build/index.js",
-    "start": "nodemon src/index.ts"
+    "start": "ts-node src/index.ts"
   },
   "devDependencies": {
     "@types/md5": "^2.3.5",

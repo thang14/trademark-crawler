@@ -1,5 +1,10 @@
 import { Level } from "level";
-export const DB_PATH = process.env.DB_PATH || "./db";
+import { getDateRangeBy } from "./elasticsearch";
+import minimist from "minimist";
+
+const args = minimist(process.argv.slice(2));
+
+export const DB_PATH = args.db || "./db";
 
 // Initialize the LevelDB instance with string keys and any type of values.
 // The data is stored in the "./db/data" directory, and values are encoded/decoded as JSON.
@@ -43,19 +48,41 @@ export async function createDateRange(daterange: string) {
   await db.batch(batch);
 }
 
+export async function createDateEveryday() {
+  function formatDateRange(): string {
+    const today = new Date(); // Ngày hôm nay
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1); // Tăng ngày thêm 1
+
+    // Hàm chuẩn hóa ngày thành định dạng YYYY-MM-DD
+    const format = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(date.getDate()).padStart(2, "0")}`;
+
+    // Ghép thành chuỗi khoảng thời gian
+    return `${format(yesterday)} TO ${format(today)}`;
+  }
+  await db.put(key(formatDateRange()), {
+    itemsCount: 0,
+    crawled: false,
+  });
+}
+
 function key(dateRange: string) {
-  return "daterange:" + dateRange;
+  return `daterange_${getDateRangeBy()}:${dateRange}`;
 }
 
 export async function getQueue() {
   const queues = [];
-  for await (const [key, value] of db.iterator({
-    gte: "daterange:",
-    lt: "daterange:" + "\uffff", // '\uffff' ensures we get all possible keys with the prefix
+  for await (const [dbkey, value] of db.iterator({
+    gte: key(""),
+    lt: key("") + "\uffff", // '\uffff' ensures we get all possible keys with the prefix
   })) {
     if (!value.crawled) {
       queues.push({
-        key: key.replace("daterange:", ""),
+        key: dbkey.replace(key(""), ""),
         value: value,
       });
     }
