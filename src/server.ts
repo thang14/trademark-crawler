@@ -2,7 +2,7 @@ import express from "express";
 import bodyParser from "body-parser";
 import { runQueues } from "./wipo";
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3007;
 
 export const runServer = () => {
   const app = express();

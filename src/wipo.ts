@@ -10,7 +10,7 @@ import {
   setDateRangeBy,
   tryCreateBulk,
 } from "./elasticsearch";
-import { TrademarkInfo } from "./interface";
+import { TrademarkInfo, Tx } from "./interface";
 import minimist from "minimist";
 import winston, { log } from "winston";
 import { createLogger, setLevel } from "./logger";
@@ -70,13 +70,12 @@ async function tryParseProduct(page: Page) {
 
 async function checkProductFinal(page: Page) {
   const text = await page.evaluate(() => {
-    return document.querySelector("#detailsPanelContentDiv .detail-wrapper")
-      ?.textContent;
+    return document.querySelector(".detail-wrapper")?.textContent;
   });
   return !text?.includes("${");
 }
 
-async function parseProduct(page: Page) {
+export async function parseProduct(page: Page) {
   if (!(await checkProductFinal(page))) return null;
   // Bóc tách dữ liệu từ HTML
   return await page.evaluate(() => {
@@ -228,9 +227,20 @@ async function parseProduct(page: Page) {
       };
     }
 
+    const txs = Array.from(
+      document.querySelectorAll("#accordion-3a tbody tr")
+    ).map((tr) => {
+      const td = tr.querySelectorAll("td");
+      return {
+        date: td[1].textContent?.trim(),
+        text: td[0].textContent?.trim(),
+        description: [],
+      };
+    });
+
     return {
       //rows: rows[0].getHTML(),
-      logo: getImageSrc(".rs-LOGO"), // URL của mẫu nhãn
+      logo: getImageSrc("#accordion-1a .rs-LOGO"), // URL của mẫu nhãn
       name: getText(5, 1),
       ...parseApplicationInfo(),
       applicationType: getText(1, 3),
@@ -244,6 +254,7 @@ async function parseProduct(page: Page) {
       exclude: getText(14, 1),
       template: getText(13, 1),
       translation: getText(12, 1),
+      txs,
     } as TrademarkInfo;
   });
 }
@@ -292,7 +303,15 @@ function isProduct(
   );
 }
 
-function checkDateRange(product: TrademarkInfo, dateRange: string[]) {
+export function checkDateRange(
+  product: {
+    applicationDate: string;
+    publicationDate: string;
+    expiredDate: string;
+    certificateDate: string;
+  },
+  dateRange: string[]
+) {
   switch (getDateRangeBy()) {
     case "application_date":
       return (
@@ -388,7 +407,7 @@ async function parseSearchResults(page: Page) {
   });
 }
 
-async function clickDateFilter(page: Page) {
+export async function clickDateFilter(page: Page) {
   switch (getDateRangeBy()) {
     case "application_date":
       await page.waitForSelector("#AFDT-filter");
@@ -409,7 +428,7 @@ async function clickDateFilter(page: Page) {
   }
 }
 
-async function typeAndSubmitSearch(
+export async function typeAndSubmitSearch(
   page: Page,
   dataRANGE: string
 ): Promise<boolean> {
@@ -442,7 +461,7 @@ async function typeAndSubmitSearch(
   throw new Error("submit search error: " + errMsg);
 }
 
-async function isNoData(page: Page) {
+export async function isNoData(page: Page) {
   return await page.evaluate(() => {
     const e = document.getElementById("noDataFoundLabel");
     return e?.checkVisibility();
@@ -481,7 +500,7 @@ const updateResult = async (
   return _searchResult;
 };
 
-async function waitHideLoading(page: Page) {
+export async function waitHideLoading(page: Page) {
   await page.waitForSelector("#loadingDiv", { hidden: true });
 }
 
@@ -631,22 +650,22 @@ export async function newPage(b: Browser, proxy: Proxy | null, url: string) {
   await page.setViewport({ width: 1920, height: 1080 });
 
   // Navigate the page to a URL
-  await page.goto(url, { timeout: 0 });
+  await page.goto(url, { timeout: 600000 });
   await page.waitForNetworkIdle(); // Wait for network resources to fully load
 
-  await page.setRequestInterception(true);
+  // await page.setRequestInterception(true);
 
-  page.on("request", (req) => {
-    if (
-      req.resourceType() === "stylesheet" ||
-      req.resourceType() === "font" ||
-      req.resourceType() === "image"
-    ) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
+  // page.on("request", (req) => {
+  //   if (
+  //     req.resourceType() === "stylesheet" ||
+  //     req.resourceType() === "font" ||
+  //     req.resourceType() === "image"
+  //   ) {
+  //     req.abort();
+  //   } else {
+  //     req.continue();
+  //   }
+  // });
 
   return page;
 }
@@ -859,12 +878,12 @@ async function search(dateRange: string, headless: boolean, index: number) {
   let isRunning = true;
   runQueues[dateRange] = {};
   while (isRunning) {
-    try {
-      const next = isQueueCount
-        ? await getCrawledItemsCount(dateRange)
-        : await countDate(dateRange);
+    const next = isQueueCount
+      ? await getCrawledItemsCount(dateRange)
+      : await countDate(dateRange);
 
-      const [browser, proxy] = await createBrowser(index, headless);
+    const [browser, proxy] = await createBrowser(index, headless);
+    try {
       const proxyServer = proxy ? proxy.server : "192.16.11.1:57432";
       const logger = createLogger(`range: ${dateRange} proxy:` + proxyServer);
 
@@ -892,6 +911,7 @@ async function search(dateRange: string, headless: boolean, index: number) {
       delete runQueues[dateRange];
     } catch (e: any) {
       console.error(e.message);
+      await browser.close();
     }
   }
 }

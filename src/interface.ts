@@ -38,4 +38,59 @@ export interface NiceClass {
     exclude: string;
     template: string;
     translation: string;
+    txs: Tx[]
   }
+
+  export interface Tx {
+    date: string,
+    text: string,
+    description: TxDescription[]
+  }
+
+  export interface TxDescription {
+    inidCode: string,
+    text: string
+  }
+
+
+export interface TrademarkGlobal {
+    id: string;
+    logo?: string;
+    source?: string;
+    name: string;
+    colors?: string[];
+    destination: string;
+    status?: string;
+    registrationDate?: string;
+    expirationDate?: string;
+    applicationLanguage?: string;
+    basicRegistration?: string;
+    indication?: string;
+    holder: {
+      name: string;
+      address: string;
+    };
+    represent?: {
+      name: string;
+      address: string;
+    };
+    classOfShapes?: Array<{
+      code: string;
+      number: number;
+      tip?: string | null;
+    }>;
+    classes: Array<{
+      code?: string;
+      description?: string;
+    }>;
+    txs: Array<{
+      date?: string;
+      text?: string;
+      description: Array<{
+        inidCode: string;
+        text: string;
+      }>;
+    }>;
+    exclude?: string
+  }
+  
