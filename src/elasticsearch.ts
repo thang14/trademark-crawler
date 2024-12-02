@@ -570,7 +570,12 @@ export async function getOldestData(size = 10): Promise<any[]> {
               ],
               size: size, // Số lượng kết quả cần lấy
               query: {
-                match: { type: 'national' }
+                prefix: {
+                  application_number: {
+                    value: "VN-"
+                  }
+                }
+                // //match: { type: 'national' }
                 // term: {
                 //   application_number: "VN-4-2019-07272"
                 // }
