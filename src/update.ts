@@ -1,8 +1,13 @@
 import { Browser, Page } from "puppeteer";
-import { getProxy, Proxy, proxyCount } from "./proxy";
-import { getDateRangeBy, getOldestData, parseDate } from "./elasticsearch";
+import { getProxy, loadProxy, Proxy, proxyCount } from "./proxy";
+import {
+  createBulk,
+  getDateRangeBy,
+  getOldestData,
+  parseDate,
+} from "./elasticsearch";
 import axios from "axios";
-import { createBrowser, parseProduct } from "./wipo";
+import { createBrowser, parseProduct, sleep } from "./wipo";
 import { TrademarkInfo } from "./interface";
 import winston from "winston";
 import { HttpProxyAgent } from "http-proxy-agent";
@@ -20,13 +25,50 @@ class AppBrowser {
 
   async start() {
     while (true) {
+      const startTime = new Date();
+
       const docs = await getOldestData(proxyCount());
-      for (let doc of docs) {
-        const item = await this.getDetail(doc);
-        console.log(item);
+      this.logger.debug(
+        "docs: " + docs.length + " | proxy count: " + proxyCount()
+      );
+      const items = await Promise.all(
+        docs.map((doc) => {
+          return this.getDetail(doc);
+        })
+      );
+
+      const diff = [];
+      for (let i = 0; i < docs.length; i++) {
+        if (docs[i].txs && docs[i].txs.length != items[i].txs.length) {
+          diff.push(docs[i].application_number);
+        }
       }
+
+      await createBulk(items);
+
+      const endTime = new Date();
+      const seconds = Math.floor(
+        (endTime.getTime() - startTime.getTime()) / 1000
+      );
+      this.logger.info(
+        `date: ${items[0].applicationDate} | done: ${
+          docs.length
+        } docs in ${seconds} s | changed: ${diff.join(",")}`
+      );
+      await sleep(1000);
     }
   }
+
+  //   async getHtml() {
+  //     let proxy = getProxy(1);
+
+  //     const httpAgent = proxy
+  //       ? new HttpProxyAgent(
+  //           `http://${proxy.user}:${proxy.password}@${proxy.server}`
+  //         )
+  //       : null;
+
+  //   }
 
   async getDetail(doc: {
     application_number: string;
@@ -41,12 +83,17 @@ class AppBrowser {
       : null;
 
     while (true) {
-      this.logger.debug("get tradenark: " + doc.application_number);
-      const response = await axios.get(DETAIL_PAGE + doc.application_number, {
+      const id = doc.application_number.replace(/-/g, "");
+
+      const response = await axios.get(DETAIL_PAGE + id, {
         httpAgent: httpAgent ? httpAgent : undefined,
       });
-
-      console.log(DETAIL_PAGE + doc.application_number, response.data);
+      this.logger.debug(
+        "get tradenark: " +
+          doc.application_number +
+          " | proxy:" +
+          (proxy ? proxy.server : "192.168.1.1")
+      );
       const detailPage = await this.browser.newPage();
       await detailPage.setContent(response.data);
       try {
@@ -89,21 +136,22 @@ function isProduct(
 ): boolean {
   if (!product) return false;
   return (
-    isValidApplicationNumber(product.applicationNumber) &&
-    isSameDate(product.applicationDate, date)
+    isValidApplicationNumber(product.applicationNumber)
   );
 }
 
 export async function runApp() {
   const args = minimist(process.argv.slice(2));
   setLevel(args.debug ? "debug" : "info");
-  const [browser, proxy] = await createBrowser(1, args.open ? false : true);
-  try {
-    const proxyServer = proxy ? proxy.server : "192.16.11.1:57432";
-    const logger = createLogger(`proxy:` + proxyServer);
-    const appBrowser = new AppBrowser(browser, proxy, logger);
-    await appBrowser.start();
-  } finally {
-    await browser.close();
+  await loadProxy();
+  while (true) {
+    const [browser, proxy] = await createBrowser(1, args.open ? false : true);
+    try {
+      const logger = createLogger("");
+      const appBrowser = new AppBrowser(browser, proxy, logger);
+      await appBrowser.start();
+    } finally {
+      await browser.close();
+    }
   }
 }

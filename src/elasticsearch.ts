@@ -2,6 +2,7 @@ import { Client } from "@elastic/elasticsearch";
 import { TrademarkGlobal, TrademarkInfo } from "./interface";
 import md5 from "md5";
 import { SearchTotalHits } from "@elastic/elasticsearch/lib/api/types";
+import { application } from "express";
 const client = new Client({
   node: process.env.ELASTICSEARCH_HOST,
 });
@@ -570,6 +571,9 @@ export async function getOldestData(size = 10): Promise<any[]> {
               size: size, // Số lượng kết quả cần lấy
               query: {
                 match: { type: 'national' }
+                // term: {
+                //   application_number: "VN-4-2019-07272"
+                // }
               }
           }
       });
